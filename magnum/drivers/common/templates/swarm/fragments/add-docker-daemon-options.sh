@@ -2,7 +2,7 @@
 
 . /etc/sysconfig/heat-params
 
-opts="-H fd:// -H tcp://0.0.0.0:2375 "
+opts="-H fd:// -H tcp://0.0.0.0:2375 --bip=192.168.169.1/24 "
 
 if [ "$TLS_DISABLED" = 'False' ]; then
     opts=$opts"--tlsverify --tlscacert=/etc/docker/ca.crt "

@@ -60,8 +60,6 @@ parameters:
     type: string
     description: docker storage driver name
     default: "devicemapper"
-    constraints:
-      - allowed_values: ["devicemapper", "overlay"]
 
   volume_driver:
     type: string
@@ -255,6 +253,10 @@ parameters:
     description: >
       domain name for cluster DNS
 
+  openstack_ca:
+    type: string
+    description: The OpenStack CA certificate to install on the node.
+
 resources:
 
   master_wait_handle:
@@ -341,6 +343,16 @@ resources:
             "$DNS_SERVICE_IP": {get_param: dns_service_ip}
             "$DNS_CLUSTER_DOMAIN": {get_param: dns_cluster_domain}
 
+  install_openstack_ca:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config:
+        str_replace:
+          params:
+            $OPENSTACK_CA: {get_param: openstack_ca}
+          template: {get_file: ../../common/templates/fragments/atomic-install-openstack-ca.sh}
+
   make_cert:
     type: OS::Heat::SoftwareConfig
     properties:
@@ -380,6 +392,39 @@ resources:
     properties:
       group: ungrouped
       config: {get_file: ../../common/templates/kubernetes/fragments/write-network-config.sh}
+
+  write_prometheus_configmap:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: {get_file: ../../common/templates/kubernetes/fragments/write-prometheus-configmap.yaml}
+
+
+  write_prometheus_service:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config: {get_file: ../../common/templates/kubernetes/fragments/write-prometheus-service.yaml}
+
+  write_grafana_service:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config:
+        str_replace:
+          template: {get_file: ../../common/templates/kubernetes/fragments/write-grafana-service.yaml}
+          params:
+            "$ADMIN_PASSWD": {get_param: grafana_admin_passwd}
+
+  enable_monitoring:
+    type: OS::Heat::SoftwareConfig
+    properties:
+      group: ungrouped
+      config:
+        str_replace:
+          template: {get_file: ../../common/templates/kubernetes/fragments/enable-monitoring.sh}
+          params:
+            "$ADMIN_PASSWD": {get_param: grafana_admin_passwd}
 
   network_config_service:
     type: OS::Heat::SoftwareConfig
@@ -435,16 +480,11 @@ resources:
       group: ungrouped
       config: {get_file: ../../common/templates/kubernetes/fragments/add-proxy.sh}
 
-  start_container_agent:
-    type: OS::Heat::SoftwareConfig
-    properties:
-      group: ungrouped
-      config: {get_file: ../../common/templates/kubernetes/fragments/start-container-agent.sh}
-
   kube_master_init:
     type: OS::Heat::MultipartMime
     properties:
       parts:
+        - config: {get_resource: install_openstack_ca}
         - config: {get_resource: disable_selinux}
         - config: {get_resource: write_heat_params}
         - config: {get_resource: configure_etcd}
@@ -453,33 +493,18 @@ resources:
         - config: {get_resource: configure_docker_storage}
         - config: {get_resource: configure_kubernetes}
         - config: {get_resource: add_proxy}
-        - config: {get_resource: enable_services}
         - config: {get_resource: write_network_config}
+        - config: {get_resource: write_prometheus_configmap}
+        - config: {get_resource: write_prometheus_service}
+#        - config: {get_resource: write_grafana_service}
         - config: {get_resource: network_config_service}
         - config: {get_resource: network_service}
+        - config: {get_resource: enable_services}
         - config: {get_resource: kube_system_namespace_service}
         - config: {get_resource: core_dns_service}
         - config: {get_resource: kube_ui_service}
-        - config: {get_resource: start_container_agent}
+#        - config: {get_resource: enable_monitoring}
         - config: {get_resource: master_wc_notify}
-
-  enable_prometheus_monitoring:
-    type: OS::Heat::SoftwareConfig
-    properties:
-      group: script
-      config:
-        str_replace:
-          template: {get_file: ../../common/templates/kubernetes/fragments/enable-prometheus-monitoring}
-          params:
-            "$ADMIN_PASSWD": {get_param: grafana_admin_passwd}
-
-  enable_prometheus_monitoring_deployment:
-    type: OS::Heat::SoftwareDeployment
-    properties:
-      signal_transport: HEAT_SIGNAL
-      config: {get_resource: enable_prometheus_monitoring}
-      server: {get_resource: kube-master}
-      actions: ['CREATE']
 
   ######################################################################
   #
@@ -496,8 +521,7 @@ resources:
       image: {get_param: server_image}
       flavor: {get_param: master_flavor}
       key_name: {get_param: ssh_key_name}
-      user_data_format: SOFTWARE_CONFIG
-      software_config_transport: POLL_SERVER_HEAT
+      user_data_format: RAW
       user_data: {get_resource: kube_master_init}
       networks:
         - port: {get_resource: kube_master_eth0}
@@ -584,3 +608,4 @@ outputs:
     value: {get_attr: [kube_master_floating, floating_ip_address]}
     description: >
       This is the "public" IP address of the Kubernetes master node.
+
